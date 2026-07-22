@@ -6,17 +6,40 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "tokens:load": "load-css-variables -p ./src/styles"
   },
   "dependencies": {
+    "@dns-modules/alert": "^2.1.1",
+    "@dns-modules/base-link": "^2.0.2",
+    "@dns-modules/base-pagination": "^2.0.2",
+    "@dns-modules/base-ui-button": "^5.0.4",
+    "@dns-modules/base-ui-tabs": "^4.1.0",
+    "@dns-modules/base-ui-tooltip": "^5.0.2602121634",
+    "@dns-modules/bottom-sheet": "^1.1.3",
+    "@dns-modules/checkbox": "^1.0.2602121650",
+    "@dns-modules/expansion": "^1.0.3",
+    "@dns-modules/font-icon": "^3.0.3",
+    "@dns-modules/list-row": "^1.1.0",
+    "@dns-modules/menu": "^3.0.2",
+    "@dns-modules/modal": "^3.0.2",
+    "@dns-modules/popover": "^3.1.0",
+    "@dns-modules/select-inline": "^2.0.2",
+    "@dns-modules/snackbar": "^3.0.0",
+    "@dns-modules/spinner": "^1.0.2602131449",
+    "@dns-modules/stepper": "^2.0.2",
+    "@dns-modules/toggle": "^1.0.2511061551",
     "pdfjs-dist": "^6.1.200",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-easy-crop": "^6.2.2",
-    "vue": "^3.5.39"
+    "vue": "^3.5.39",
+    "vue-i18n": "^11.4.7"
   },
   "devDependencies": {
+    "@dns-modules/css-variables-loader": "^1.0.2503271216",
     "@vitejs/plugin-vue": "^6.0.7",
+    "sass-embedded": "^1.100.0",
     "vite": "^8.1.1"
   }
 }
