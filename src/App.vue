@@ -1,5 +1,5 @@
 <script setup>
-import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, defineComponent, h, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { BaseUiButton as DnsButton, BaseUiIconButton as DnsIconButton } from '@dns-modules/base-ui-button'
 import { BaseLink as DnsLink } from '@dns-modules/base-link'
 import { Tab as DnsTab, TabList as DnsTabList } from '@dns-modules/base-ui-tabs'
@@ -10,16 +10,79 @@ import { FlatMenuList as DnsFlatMenu, MenuItem as DnsMenuItem } from '@dns-modul
 import { Modal as DnsModal } from '@dns-modules/modal'
 import { Popover as DnsPopover } from '@dns-modules/popover'
 import { RadioOption as DnsRadioOption, SelectInline as DnsSelectInline } from '@dns-modules/select-inline'
+import { DefaultOption as DnsDefaultOption } from '@dns-modules/select-list'
 import { Snackbar as DnsSnackbar } from '@dns-modules/snackbar'
 import { Stepper as DnsStepper } from '@dns-modules/stepper'
 import DnsToggle from '@dns-modules/toggle'
+import {
+  IconActionAdd,
+  IconActionClose,
+  IconActionDelete,
+  IconActionSave,
+  IconActionSendMessage,
+  IconActionZoomIn,
+  IconActionZoomOut,
+  IconNavArrowDown,
+  IconNavArrowCollapse,
+  IconNavArrowExpand,
+  IconNavArrowReverseLeft,
+  IconNavArrowReverseRight,
+  IconNavArrowUp,
+  IconNavChevronDown,
+  IconNavChevronLeft,
+  IconNavChevronRight,
+  IconNavLogOut,
+  IconNavMenuDotsVertical,
+  IconSystemCheck,
+  IconSystemCheckCircle,
+  IconSystemExclamationCircle,
+} from '@dns-modules/font-icon'
 import emptyStateImage from './assets/Empty states.png'
+import cropIcon from './assets/crop.svg'
 
 const ReactEasyCrop = defineAsyncComponent(() => import('./components/ReactEasyCrop.vue'))
 const PdfPreview = defineAsyncComponent(() => import('./components/PdfPreview.vue'))
 
+const dnsIcons = {
+  arrowUp: IconNavArrowUp,
+  arrowDown: IconNavArrowDown,
+  check: IconSystemCheck,
+  checkCircle: IconSystemCheckCircle,
+  errorCircle: IconSystemExclamationCircle,
+  fitPreview: IconNavArrowCollapse,
+  chevron: IconNavChevronDown,
+  chevronLeft: IconNavChevronLeft,
+  chevronRight: IconNavChevronRight,
+  close: IconActionClose,
+  fit: IconNavArrowExpand,
+  logout: IconNavLogOut,
+  more: IconNavMenuDotsVertical,
+  plus: IconActionAdd,
+  rotateLeft: IconNavArrowReverseLeft,
+  rotateRight: IconNavArrowReverseRight,
+  save: IconActionSave,
+  send: IconActionSendMessage,
+  trash: IconActionDelete,
+  zoomIn: IconActionZoomIn,
+  zoomOut: IconActionZoomOut,
+}
+
+const DsIcon = defineComponent({
+  name: 'DsIcon',
+  props: { name: { type: String, required: true } },
+  setup(props, { attrs }) {
+    return () => h(dnsIcons[props.name], attrs)
+  },
+})
+
 const MB = 1024 * 1024
 const MAX_FILE_SIZE = 20 * MB
+const PREVIEW_ZOOM_MIN = 0.5
+const PREVIEW_ZOOM_MAX = 3
+const CROP_ZOOM_MIN = 0.25
+const CROP_ZOOM_MAX = 2.5
+const PREVIEW_SEARCH_OPTION_ID = '__preview-search__'
+const PREVIEW_EMPTY_OPTION_ID = '__preview-empty__'
 const REORDER_HOLD_DELAY = 800
 const REORDER_MOVE_THRESHOLD = 8
 const allowedExtensions = ['pdf', 'jpg', 'jpeg', 'png']
@@ -54,7 +117,6 @@ const fileInput = ref(null)
 const errorSummary = ref(null)
 const packageTitle = ref(null)
 const uploadPopoverAnchor = ref(null)
-const desktopPreviewSelectAnchor = ref(null)
 const deletionPopoverAnchor = ref(null)
 const dragActive = ref(false)
 const previewEnabled = ref(false)
@@ -70,8 +132,11 @@ const crop = ref({ x: 0, y: 0 })
 const cropZoom = ref(1)
 const cropZoomStepperValue = ref(100)
 const cropRotation = ref(0)
+const cropRotationInput = ref(0)
 const cropPixels = ref(null)
-const cropFormat = ref('original')
+const cropObjectFit = ref('contain')
+const cropFitRequest = ref(0)
+const cropFormat = ref('a4-portrait')
 const cropFormatSelectOpen = ref(false)
 const cropImageRatio = ref(1)
 const pdfPageCounts = ref({})
@@ -137,8 +202,6 @@ const isMobileViewport = ref(mobileViewportQuery.matches)
 const cropFormatDefinitions = [
   { id: 'a4-portrait', title: 'A4-книжная' },
   { id: 'a4-landscape', title: 'A4-альбомная' },
-  { id: 'original', title: 'Исходные пропорции' },
-  { id: 'free', title: 'Свободный формат' },
 ]
 
 const failedCount = computed(() => failedFiles.value.length)
@@ -252,6 +315,12 @@ const filteredPreviewFileOptions = computed(() => {
   if (!query) return previewFileOptions.value
   return previewFileOptions.value.filter((option) => option.title.toLocaleLowerCase('ru-RU').includes(query))
 })
+const previewFileSelectOptions = computed(() => [
+  { id: PREVIEW_SEARCH_OPTION_ID, title: '', isSelected: false },
+  ...(filteredPreviewFileOptions.value.length
+    ? filteredPreviewFileOptions.value
+    : [{ id: PREVIEW_EMPTY_OPTION_ID, title: 'Файлы не найдены', isSelected: false }]),
+])
 const mobileActionsReference = computed(() => mobileActionsTrigger.value)
 const currentPreviewIsImage = computed(() => currentPreviewFile.value?.type?.startsWith('image/'))
 const currentPreviewPageCount = computed(() => {
@@ -260,18 +329,15 @@ const currentPreviewPageCount = computed(() => {
   const pages = Number(currentPreviewFile.value?.pages)
   return Number.isFinite(pages) && pages > 0 ? pages : 1
 })
-const previewZoomPercent = computed(() => Math.round(previewZoom.value * 100))
-const previewZoomStepperLabel = computed(() => previewZoomStepperValue.value === '' ? '' : `${previewZoomStepperValue.value}%`)
-const cropZoomStepperLabel = computed(() => cropZoomStepperValue.value === '' ? '' : `${cropZoomStepperValue.value}%`)
+const canDecreasePreviewZoom = computed(() => previewZoom.value > PREVIEW_ZOOM_MIN)
+const canIncreasePreviewZoom = computed(() => previewZoom.value < PREVIEW_ZOOM_MAX)
+const canDecreaseCropZoom = computed(() => cropZoom.value > CROP_ZOOM_MIN)
+const canIncreaseCropZoom = computed(() => cropZoom.value < CROP_ZOOM_MAX)
 const cropAspect = computed(() => {
   if (cropFormat.value === 'a4-portrait') return 1 / Math.sqrt(2)
-  if (cropFormat.value === 'a4-landscape') return Math.sqrt(2)
-  if (cropFormat.value === 'original') return cropImageRatio.value
-  return null
+  return Math.sqrt(2)
 })
 const cropFormatHint = computed(() => {
-  if (cropFormat.value === 'free') return 'Свободная рамка: пропорции можно менять вручную.'
-  if (cropFormat.value === 'original') return 'Сохраняются исходные пропорции изображения.'
   return 'Форматы серии A имеют одинаковые пропорции; выбранная рамка подходит для страницы документа.'
 })
 const cropFormatOptions = computed(() => cropFormatDefinitions.map((option) => ({
@@ -289,27 +355,23 @@ mobileViewportQuery.addEventListener('change', syncMobileViewport)
 watch(currentPreviewFile, () => resetPreviewView())
 watch(previewZoom, (value) => {
   const percent = Math.round(value * 100)
-  if (Number(previewZoomStepperValue.value) !== percent) previewZoomStepperValue.value = percent
+  if (previewZoomStepperValue.value !== percent) previewZoomStepperValue.value = percent
 })
 watch(previewZoomStepperValue, (value) => {
-  if (value === '') return
   const percent = Number(value)
-  if (!Number.isFinite(percent)) return
-  if (percent >= 50 && percent <= 300) {
-    setPreviewZoom(percent / 100)
-  }
+  if (Number.isFinite(percent)) setPreviewZoom(percent / 100)
 })
 watch(cropZoom, (value) => {
   const percent = Math.round(value * 100)
-  if (Number(cropZoomStepperValue.value) !== percent) cropZoomStepperValue.value = percent
+  if (cropZoomStepperValue.value !== percent) cropZoomStepperValue.value = percent
 })
 watch(cropZoomStepperValue, (value) => {
-  if (value === '') return
   const percent = Number(value)
-  if (!Number.isFinite(percent)) return
-  if (percent >= 100 && percent <= 300) {
-    setCropZoom(percent / 100)
-  }
+  if (Number.isFinite(percent)) setCropZoom(percent / 100)
+})
+watch(cropRotation, (value) => {
+  const rounded = Math.round(value)
+  if (Number(cropRotationInput.value) !== rounded) cropRotationInput.value = rounded
 })
 watch(previewSelectOpen, (isOpen) => {
   if (!isOpen) previewFileSearch.value = ''
@@ -382,7 +444,8 @@ function resetPreviewView() {
   cropZoom.value = 1
   cropRotation.value = 0
   cropPixels.value = null
-  cropFormat.value = 'original'
+  cropObjectFit.value = 'contain'
+  cropFormat.value = 'a4-portrait'
   cropImageRatio.value = 1
   previewError.value = ''
 }
@@ -401,7 +464,7 @@ function navigatePage(direction) {
 }
 
 function setPreviewZoom(nextZoom) {
-  previewZoom.value = Math.min(3, Math.max(0.5, Number(nextZoom)))
+  previewZoom.value = Math.min(PREVIEW_ZOOM_MAX, Math.max(PREVIEW_ZOOM_MIN, Number(nextZoom)))
   if (previewZoom.value <= 1) previewPan.value = { x: 0, y: 0 }
 }
 
@@ -445,22 +508,16 @@ function startCropping() {
   cropZoom.value = 1
   cropRotation.value = 0
   cropPixels.value = null
-  cropFormat.value = 'original'
+  cropObjectFit.value = 'cover'
+  cropFormat.value = 'a4-portrait'
   cropFormatSelectOpen.value = false
   cropImageRatio.value = 1
 
   const image = new Image()
   image.onload = () => {
     const ratio = image.naturalWidth / image.naturalHeight
-    const portraitRatio = 1 / Math.sqrt(2)
-    const landscapeRatio = Math.sqrt(2)
     cropImageRatio.value = ratio
-    cropFormat.value = Math.abs(ratio - portraitRatio) <= Math.abs(ratio - landscapeRatio)
-      ? 'a4-portrait'
-      : 'a4-landscape'
-    if (Math.min(Math.abs(ratio - portraitRatio), Math.abs(ratio - landscapeRatio)) > 0.12) {
-      cropFormat.value = 'original'
-    }
+    cropFormat.value = getSuggestedCropFormat(ratio)
   }
   image.src = file.previewUrl
   nextTick(() => document.querySelector('.crop-dialog')?.focus())
@@ -470,7 +527,25 @@ function cancelCropping() {
   cropMode.value = false
   cropRotation.value = 0
   cropPixels.value = null
+  cropObjectFit.value = 'contain'
   cropFormatSelectOpen.value = false
+}
+
+function getSuggestedCropFormat(ratio) {
+  const portraitRatio = 1 / Math.sqrt(2)
+  const landscapeRatio = Math.sqrt(2)
+  return Math.abs(ratio - portraitRatio) <= Math.abs(ratio - landscapeRatio)
+    ? 'a4-portrait'
+    : 'a4-landscape'
+}
+
+function resetCropEdits() {
+  crop.value = { x: 0, y: 0 }
+  cropZoom.value = 1
+  cropRotation.value = 0
+  cropPixels.value = null
+  cropObjectFit.value = 'cover'
+  cropFormat.value = getSuggestedCropFormat(cropImageRatio.value)
 }
 
 function changeCropFormat() {
@@ -478,6 +553,7 @@ function changeCropFormat() {
   cropZoom.value = 1
   cropRotation.value = 0
   cropPixels.value = null
+  cropObjectFit.value = 'cover'
 }
 
 function selectCropFormat(id) {
@@ -487,12 +563,33 @@ function selectCropFormat(id) {
 }
 
 function setCropZoom(nextZoom) {
-  cropZoom.value = Math.min(3, Math.max(1, Number(nextZoom)))
+  cropZoom.value = Math.min(CROP_ZOOM_MAX, Math.max(CROP_ZOOM_MIN, Number(nextZoom)))
+}
+
+function zoomCropWithWheel(event) {
+  // Wheel deltas vary across a conventional mouse, touchpad, and browser.
+  // Normalising them keeps each scroll notch a useful, but not abrupt, zoom step.
+  const lineHeight = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 160 : 1
+  const zoomFactor = Math.exp((-event.deltaY * lineHeight) / 720)
+  setCropZoom(cropZoom.value * zoomFactor)
+}
+
+function fillCrop() {
+  crop.value = { x: 0, y: 0 }
+  cropObjectFit.value = 'contain'
+  // The cropper calculates the exact zoom after it has the current grid size.
+  // A new request is needed even if the user presses the button repeatedly.
+  cropFitRequest.value += 1
+}
+
+function setCropRotation(value) {
+  const degree = Number(value)
+  if (!Number.isFinite(degree)) return
+  cropRotation.value = ((degree % 360) + 360) % 360
 }
 
 function rotateCrop(direction) {
   cropRotation.value = (cropRotation.value + direction + 360) % 360
-  crop.value = { x: 0, y: 0 }
   cropPixels.value = null
 }
 
@@ -520,6 +617,10 @@ function applyCrop() {
     canvas.width = Math.round(area.width)
     canvas.height = Math.round(area.height)
     const context = canvas.getContext('2d')
+    // When the image is fitted into a differently shaped A4 frame, preserve
+    // the entire image and use a document-like white background for the free area.
+    context.fillStyle = '#ffffff'
+    context.fillRect(0, 0, canvas.width, canvas.height)
     context.drawImage(sourceCanvas, area.x, area.y, area.width, area.height, 0, 0, canvas.width, canvas.height)
     canvas.toBlob((blob) => {
       if (!blob) return
@@ -528,6 +629,7 @@ function applyCrop() {
       cropMode.value = false
       cropRotation.value = 0
       cropPixels.value = null
+      cropObjectFit.value = 'contain'
       announce('Кадрирование изображения применено.')
     }, file.type === 'image/png' ? 'image/png' : 'image/jpeg', 0.92)
   }
@@ -550,8 +652,8 @@ function openFilePicker() {
   fileInput.value?.click()
 }
 
-function setPreviewEnabled(event) {
-  previewEnabled.value = event.target.checked
+function setPreviewEnabled() {
+  previewEnabled.value = !previewEnabled.value
 }
 
 function selectPreviewFile(id) {
@@ -1435,51 +1537,21 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="app-shell">
-    <svg class="icon-sprite" aria-hidden="true">
-      <symbol id="i-arrow-up" viewBox="0 0 24 24"><path d="m6 10 6-6 6 6M12 4v16" /></symbol>
-      <symbol id="i-arrow-down" viewBox="0 0 24 24"><path d="m6 14 6 6 6-6M12 20V4" /></symbol>
-      <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6" /></symbol>
-      <symbol id="i-check-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="m8 12 2.6 2.6L16.5 9" /></symbol>
-      <symbol id="i-error-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M12 7.5v6M12 17v.5" /></symbol>
-      <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m8 10 4 4 4-4" /></symbol>
-      <symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="m14.5 5-7 7 7 7" /></symbol>
-      <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9.5 5 7 7-7 7" /></symbol>
-      <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" /></symbol>
-      <symbol id="i-crop" viewBox="0 0 24 24"><path d="M7 3v14a4 4 0 0 0 4 4h10M17 21V7a4 4 0 0 0-4-4H3M3 7h18" /></symbol>
-      <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6zM14 3v5h4M9 13h6M9 17h4" /></symbol>
-      <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7.5v.5" /></symbol>
-      <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16" /></symbol>
-      <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="12" cy="19" r="1" fill="currentColor" stroke="none" /></symbol>
-      <symbol id="i-logout" viewBox="0 0 24 24"><path d="M14 8V4H5v16h9v-4M10 12h10M17 9l3 3-3 3" /></symbol>
-      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></symbol>
-      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M18.5 9A7 7 0 0 0 6.4 6.4L4 9M5.5 15A7 7 0 0 0 17.6 17.6L20 15" /></symbol>
-      <symbol id="i-rotate-left" viewBox="0 0 24 24"><path d="M4 8V3M4 3h5M4.5 8A8 8 0 1 1 4 14" /></symbol>
-      <symbol id="i-rotate-right" viewBox="0 0 24 24"><path d="M20 8V3M20 3h-5M19.5 8A8 8 0 1 0 20 14" /></symbol>
-      <symbol id="i-save" viewBox="0 0 24 24"><path d="M4 4h13l3 3v13H4zM8 4v6h8V4M8 20v-6h8v6" /></symbol>
-      <symbol id="i-send" viewBox="0 0 24 24"><path d="m3 4 18 8-18 8 3-8zM6 12h15" /></symbol>
-      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" /></symbol>
-      <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M5 20h14" /></symbol>
-      <symbol id="i-warning" viewBox="0 0 24 24"><path d="M12 3 2.5 20h19zM12 9v5M12 17.5v.5" /></symbol>
-      <symbol id="i-zoom-in" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4 4M10.5 7.5v6M7.5 10.5h6" /></symbol>
-      <symbol id="i-zoom-out" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4 4M7.5 10.5h6" /></symbol>
-    </svg>
-
     <header class="topbar">
       <a href="#" class="brand" aria-label="DNS ОЦИФРОВКА — главная">
-        <img class="brand__logo brand__logo--desktop" src="/DNS%20SDD%20Logo.svg" width="182" height="34" alt="" />
+        <img class="brand__logo brand__logo--desktop" src="/DNS%20SDD%20Logo.svg" width="262" height="34" alt="" />
         <span class="mobile-brand" aria-hidden="true">
-          <span class="mobile-brand__mark"><img src="/DNS%20SDD%20Logo.svg" alt="" /></span>
-          <span class="mobile-brand__label">ОЦИФРОВКА</span>
+          <img class="mobile-brand__logo" src="/DNS%20SDD%20Logo.svg" alt="" />
         </span>
       </a>
 
       <div class="topbar__navigation">
         <nav class="main-nav" aria-label="Разделы">
-          <DnsTabList :tabs="navigationTabs" class="main-nav__list">
+          <DnsTabList :tabs="navigationTabs" type="filled" class="main-nav__list">
             <template #default="tab">
               <DnsTab
+                type="filled"
                 class="main-nav__item"
-                :class="{ 'main-nav__item--active': activeNavigationTab === tab.id }"
                 :is-active="activeNavigationTab === tab.id"
                 @click="activeNavigationTab = tab.id"
               >
@@ -1492,15 +1564,17 @@ onBeforeUnmount(() => {
 
       <div v-if="!isMobileViewport" class="user-area">
         <DnsLink class="help-link" tag="a" href="#upload-help">Помощь</DnsLink>
-        <DnsIconButton class="logout-button" variant="secondary" size="medium" type="button" aria-label="Выйти">
-          <svg class="icon"><use href="#i-logout" /></svg>
-        </DnsIconButton>
+        <DnsButton class="logout-button" variant="secondary" size="medium" type="button">
+          <template #icon-left><DsIcon name="logout" class="icon" aria-hidden="true" /></template>
+          Выход
+        </DnsButton>
       </div>
       <template v-else>
         <DnsLink class="mobile-header-help" tag="a" href="#upload-help">Помощь</DnsLink>
-        <DnsIconButton class="mobile-menu-button" variant="secondary" size="medium" type="button" aria-label="Выйти">
-          <svg class="icon"><use href="#i-logout" /></svg>
-        </DnsIconButton>
+        <DnsButton class="mobile-menu-button" variant="secondary" size="small" type="button">
+          <template #icon-left><DsIcon name="logout" class="icon" aria-hidden="true" /></template>
+          Выход
+        </DnsButton>
       </template>
     </header>
 
@@ -1525,7 +1599,7 @@ onBeforeUnmount(() => {
                 :aria-expanded="mobileActionsMenuOpen"
                 @click.stop="mobileActionsMenuOpen = !mobileActionsMenuOpen"
               >
-                <svg class="icon"><use href="#i-more" /></svg>
+                <DsIcon name="more" class="icon" aria-hidden="true" />
               </DnsIconButton>
             </span>
           </div>
@@ -1543,12 +1617,12 @@ onBeforeUnmount(() => {
               </DnsToggle>
 
               <DnsButton class="button button--secondary" variant="secondary" type="button" :disabled="!uploadedFiles.length" @click="saveDraft">
-                <template #icon-left><svg class="icon"><use href="#i-save" /></svg></template>
+                <template #icon-left><DsIcon name="save" class="icon" aria-hidden="true" /></template>
                 {{ draftSaved ? 'Черновик сохранён' : 'Сохранить черновик' }}
               </DnsButton>
 
               <DnsButton class="button button--primary" variant="primary" type="button" :disabled="!canSend" @click="sendPackage">
-                <template #icon-left><svg class="icon"><use href="#i-send" /></svg></template>
+                <template #icon-left><DsIcon name="send" class="icon" aria-hidden="true" /></template>
                 Отправить пакет
               </DnsButton>
             </div>
@@ -1568,10 +1642,10 @@ onBeforeUnmount(() => {
             <div class="toolbar__selection" aria-label="Действия с выбранными файлами">
               <div class="toolbar__movement">
                 <DnsIconButton class="icon-button" variant="tertiary" size="tiny" type="button" :disabled="!canMoveSelectionUp" :aria-label="selectedCount === 1 ? 'Переместить выбранный файл вверх' : 'Переместить выбранные файлы вверх'" @click="moveSelected(-1)">
-                  <svg class="icon"><use href="#i-arrow-up" /></svg>
+                  <DsIcon name="arrowUp" class="icon" aria-hidden="true" />
                 </DnsIconButton>
                 <DnsIconButton class="icon-button" variant="tertiary" size="tiny" type="button" :disabled="!canMoveSelectionDown" :aria-label="selectedCount === 1 ? 'Переместить выбранный файл вниз' : 'Переместить выбранные файлы вниз'" @click="moveSelected(1)">
-                  <svg class="icon"><use href="#i-arrow-down" /></svg>
+                  <DsIcon name="arrowDown" class="icon" aria-hidden="true" />
                 </DnsIconButton>
               </div>
               <DnsLink class="toolbar__delete" tag="a" href="#" variant="danger" :disabled="!selectedCount" @click.prevent.stop="deleteSelected($event)">
@@ -1584,7 +1658,7 @@ onBeforeUnmount(() => {
                 Очистить пакет
               </DnsLink>
               <DnsButton class="button toolbar__add button--compact" variant="info" size="tiny" type="button" @click="openFilePicker">
-                <template #icon-left><svg class="icon"><use href="#i-plus" /></svg></template>
+                <template #icon-left><DsIcon name="plus" class="icon" aria-hidden="true" /></template>
                 Добавить файлы
               </DnsButton>
             </div>
@@ -1602,35 +1676,43 @@ onBeforeUnmount(() => {
           <Teleport v-if="previewEnabled && currentPreviewFile && !mobilePreviewOpen" to="#file-preview-area">
           <section class="file-preview" aria-label="Предпросмотр файла">
             <header class="file-preview__header">
-              <div ref="desktopPreviewSelectAnchor" class="file-preview__file-select-anchor" @click.stop>
+              <div class="file-preview__file-select-anchor">
                 <DnsSelectInline
                   class="file-preview__file-select"
                   :class="{ 'file-preview__file-select--open': previewSelectOpen }"
-                  :is-open="false"
-                  :options="previewFileOptions"
+                  :is-open="previewSelectOpen"
+                  :options="previewFileSelectOptions"
                   position="left"
                   size="small"
                   aria-label="Файл для предпросмотра"
                   @click:input="previewSelectOpen = !previewSelectOpen"
+                  @close="previewSelectOpen = false"
                 >
-                  <template #label>Файл:</template>
-                  <template #value>{{ currentPreviewFile.name }}</template>
+                  <template #label>Файл</template>
+                  <template #value>
+                    <span class="file-preview__file-select-value" :title="currentPreviewFile.name">{{ currentPreviewFile.name }}</span>
+                  </template>
                   <template #default="{ id, title, isSelected }">
-                    <DnsRadioOption :is-selected="Boolean(isSelected)" @click="selectPreviewFile(id)">
+                    <label v-if="id === PREVIEW_SEARCH_OPTION_ID" class="preview-file-select__search" @click.stop>
+                      <span class="visually-hidden">Найти файл в списке</span>
+                      <input v-model="previewFileSearch" type="search" placeholder="Найти файл" autocomplete="off" @keydown.stop />
+                    </label>
+                    <p v-else-if="id === PREVIEW_EMPTY_OPTION_ID" class="preview-file-select__empty">{{ title }}</p>
+                    <DnsDefaultOption v-else :is-selected="Boolean(isSelected)" class="preview-file-select__option" @click="selectPreviewFile(id)">
                       {{ title }}
-                    </DnsRadioOption>
+                    </DnsDefaultOption>
                   </template>
                 </DnsSelectInline>
               </div>
 
               <div class="file-preview__file-nav" aria-label="Переключение файлов">
-                <span>Файл {{ currentPreviewIndex + 1 }} из {{ uploadedFiles.length }}</span>
+                <span>{{ currentPreviewIndex + 1 }} из {{ uploadedFiles.length }}</span>
                 <div class="file-preview__file-nav-buttons">
                   <DnsIconButton class="icon-button icon-button--preview" variant="tertiary" size="small" type="button" :disabled="currentPreviewIndex <= 0" aria-label="Предыдущий файл" @click="navigatePreview(-1)">
-                    <svg class="icon"><use href="#i-chevron-left" /></svg>
+                    <DsIcon name="chevronLeft" class="icon" aria-hidden="true" />
                   </DnsIconButton>
                   <DnsIconButton class="icon-button icon-button--preview" variant="tertiary" size="small" type="button" :disabled="currentPreviewIndex >= uploadedFiles.length - 1" aria-label="Следующий файл" @click="navigatePreview(1)">
-                    <svg class="icon"><use href="#i-chevron-right" /></svg>
+                    <DsIcon name="chevronRight" class="icon" aria-hidden="true" />
                   </DnsIconButton>
                 </div>
               </div>
@@ -1650,7 +1732,7 @@ onBeforeUnmount(() => {
 
             <footer class="file-preview__controls" :class="{ 'file-preview__controls--image': currentPreviewIsImage }">
               <div class="file-preview__view-tools">
-                <div class="file-preview__zoom dns-zoom-stepper" aria-label="Масштаб предпросмотра">
+                <div class="file-preview__zoom dns-zoom-stepper" :class="{ 'dns-zoom-stepper--min': !canDecreasePreviewZoom, 'dns-zoom-stepper--max': !canIncreasePreviewZoom }" :data-value="previewZoomStepperValue" aria-label="Масштаб предпросмотра">
                   <DnsStepper
                     v-model="previewZoomStepperValue"
                     class="dns-zoom-stepper__control"
@@ -1659,10 +1741,9 @@ onBeforeUnmount(() => {
                     :min="50"
                     :max="300"
                   />
-                  <output class="dns-zoom-stepper__value" aria-live="polite">{{ previewZoomStepperLabel }}</output>
                 </div>
-                <DnsIconButton class="icon-button icon-button--preview" variant="tertiary" size="small" type="button" aria-label="Сбросить масштаб и положение" @click="resetPreviewZoom">
-                  <svg class="icon"><use href="#i-rotate-left" /></svg>
+                <DnsIconButton class="icon-button icon-button--preview" variant="tertiary" size="small" type="button" aria-label="Вписать в область предпросмотра" @click="resetPreviewZoom">
+                  <DsIcon name="fitPreview" class="icon" aria-hidden="true" />
                 </DnsIconButton>
               </div>
 
@@ -1670,55 +1751,23 @@ onBeforeUnmount(() => {
                 <span>Стр. {{ previewPage }} из {{ currentPreviewPageCount }}</span>
                 <div class="file-preview__page-nav-buttons">
                   <DnsIconButton class="icon-button icon-button--preview" variant="tertiary" size="small" type="button" :disabled="previewPage <= 1" aria-label="Предыдущая страница" @click="navigatePage(-1)">
-                    <svg class="icon file-preview__chevron-up"><use href="#i-chevron" /></svg>
+                    <DsIcon name="chevron" class="icon file-preview__chevron-up" aria-hidden="true" />
                   </DnsIconButton>
                   <DnsIconButton class="icon-button icon-button--preview" variant="tertiary" size="small" type="button" :disabled="previewPage >= currentPreviewPageCount" aria-label="Следующая страница" @click="navigatePage(1)">
-                    <svg class="icon"><use href="#i-chevron" /></svg>
+                    <DsIcon name="chevron" class="icon" aria-hidden="true" />
                   </DnsIconButton>
                 </div>
               </div>
 
               <div v-if="currentPreviewIsImage" class="file-preview__crop-actions">
                 <DnsButton variant="tertiary" size="small" type="button" @click="startCropping">
-                  <template #icon-left><svg class="icon"><use href="#i-crop" /></svg></template>
-                  Кадрировать
+                  <template #icon-left><img :src="cropIcon" class="icon" alt="" aria-hidden="true" /></template>
+                  Редактировать
                 </DnsButton>
               </div>
             </footer>
           </section>
           </Teleport>
-
-          <DnsPopover
-            v-if="previewSelectOpen && !isMobileViewport && currentPreviewFile"
-            class="preview-file-popover"
-            :reference="desktopPreviewSelectAnchor"
-            position="bottom-start"
-            :side-padding="4"
-            :has-cross="false"
-            @close="previewSelectOpen = false"
-          >
-            <template #content>
-              <div class="preview-file-popover__content">
-                <label class="preview-file-popover__search">
-                  <span class="visually-hidden">Найти файл в списке</span>
-                  <input v-model="previewFileSearch" type="search" placeholder="Найти в списке" autocomplete="off" />
-                </label>
-                <ul class="preview-file-popover__list">
-                  <li v-for="option in filteredPreviewFileOptions" :key="option.id">
-                    <button
-                      type="button"
-                      :class="{ 'preview-file-popover__option--selected': option.isSelected }"
-                      @click="selectPreviewFile(option.id)"
-                    >
-                      <span>{{ option.title }}</span>
-                      <svg v-if="option.isSelected" class="icon" aria-hidden="true"><use href="#i-check" /></svg>
-                    </button>
-                  </li>
-                </ul>
-                <p v-if="!filteredPreviewFileOptions.length" class="preview-file-popover__empty">Файлы не найдены</p>
-              </div>
-            </template>
-          </DnsPopover>
 
           <div
             class="upload-drop-zone"
@@ -1741,12 +1790,12 @@ onBeforeUnmount(() => {
           >
             <div class="status-panel__header">
               <div class="status-panel__title">
-                <svg class="icon upload-errors__icon" aria-hidden="true"><use href="#i-error-circle" /></svg>
+                <DsIcon name="errorCircle" class="icon upload-errors__icon" aria-hidden="true" />
                 <h2 id="upload-errors-title">{{ failedHeading }}</h2>
               </div>
               <div class="status-panel__actions">
                 <DnsIconButton class="icon-button icon-button--alert-close" variant="tertiary" size="small" type="button" aria-label="Закрыть уведомление об ошибке загрузки" @click="dismissErrorAlert">
-                  <svg class="icon"><use href="#i-close" /></svg>
+                  <DsIcon name="close" class="icon" aria-hidden="true" />
                 </DnsIconButton>
               </div>
             </div>
@@ -1774,7 +1823,7 @@ onBeforeUnmount(() => {
             >
               {{ errorAlertExpanded ? 'Свернуть' : 'Подробнее' }}
               <template #icon-right>
-                <svg class="icon" :class="{ 'upload-errors__toggle-icon--expanded': errorAlertExpanded }"><use href="#i-chevron" /></svg>
+                <DsIcon name="chevron" class="icon" :class="{ 'upload-errors__toggle-icon--expanded': errorAlertExpanded }" aria-hidden="true" />
               </template>
             </DnsButton>
           </section>
@@ -1785,19 +1834,19 @@ onBeforeUnmount(() => {
                 <tr>
                   <th class="cell-check">
                     <DnsCheckbox
-                      class="checkbox-control"
-                      :class="{ 'checkbox-control--indeterminate': hasPartialSelection }"
+                      class="desktop-table-checkbox"
+                      :class="{ 'desktop-table-checkbox--indeterminate': hasPartialSelection }"
                       :checked="allSelected || hasPartialSelection"
                       :disabled="!uploadedFiles.length"
-                      size="big"
                       aria-label="Выбрать все файлы в пакете"
+                      size="big"
                       @vue-click="toggleAllSelection"
                     />
                   </th>
                   <th class="cell-name">Имя файла</th>
-                  <th class="cell-size">Размер файла, МБ</th>
+                  <th class="cell-size">Размер</th>
                   <th class="cell-pages">Кол-во страниц</th>
-                  <th class="cell-actions">Действия</th>
+                  <th class="cell-actions" aria-label="Действия" />
                 </tr>
               </thead>
               <tbody>
@@ -1819,10 +1868,10 @@ onBeforeUnmount(() => {
                 >
                   <td class="cell-check">
                     <DnsCheckbox
-                      class="checkbox-control"
+                      class="desktop-table-checkbox"
                       :checked="selectedIds.includes(file.id)"
-                      size="big"
                       :aria-label="`Выбрать ${file.name}`"
+                      size="big"
                       @vue-click="toggleFileSelection(file.id)"
                     />
                   </td>
@@ -1835,7 +1884,7 @@ onBeforeUnmount(() => {
                   <td class="cell-pages">{{ file.pages }}</td>
                   <td class="cell-actions">
                     <DnsIconButton class="icon-button icon-button--table" variant="secondary" size="small" type="button" :aria-label="'Удалить ' + file.name" @click.stop="deleteFile(file.id, $event)">
-                      <svg class="icon"><use href="#i-trash" /></svg>
+                      <DsIcon name="trash" class="icon" aria-hidden="true" />
                     </DnsIconButton>
                   </td>
                 </tr>
@@ -1847,14 +1896,16 @@ onBeforeUnmount(() => {
             <div class="desktop-empty-state__message">
               <h2 id="desktop-empty-title">В пакете пока нет документов</h2>
               <p>
-                Перетащите файлы или
-                <DnsLink class="desktop-empty-state__picker" tag="button" type="button" @click="openFilePicker">
-                  выберите их на компьютере
-                </DnsLink>.<br />
+                Перетащите файлы или выберите их на компьютере.<br />
                 Поддерживаются PDF, JPG, JPEG и PNG.
               </p>
             </div>
-            <DnsLink class="desktop-empty-state__help" tag="a" href="#upload-help">Как загружать документы</DnsLink>
+            <div class="desktop-empty-state__actions">
+              <DnsButton class="button desktop-empty-state__add" variant="primary" size="medium" type="button" @click="openFilePicker">
+                Добавить файлы
+              </DnsButton>
+              <DnsLink class="desktop-empty-state__help" tag="a" href="#upload-help">Как загружать документы</DnsLink>
+            </div>
           </section>
           <DnsLink v-if="uploadedFiles.length" id="upload-help" class="table-help-link" tag="a" href="#upload-help">
             Как загружать документы
@@ -1906,7 +1957,7 @@ onBeforeUnmount(() => {
                 </div>
                 <template #right>
                   <DnsIconButton class="icon-button mobile-file-list__delete" variant="secondary" size="tiny" type="button" :aria-label="'Удалить ' + file.name" @click.stop="deleteFile(file.id, $event)">
-                    <svg class="icon"><use href="#i-trash" /></svg>
+                    <DsIcon name="trash" class="icon" aria-hidden="true" />
                   </DnsIconButton>
                 </template>
               </DnsListRow>
@@ -1944,8 +1995,8 @@ onBeforeUnmount(() => {
 
     <aside v-if="selectedCount" class="mobile-selection-bar" aria-label="Действия с выбранными файлами">
       <div class="mobile-selection-bar__moves">
-        <DnsIconButton class="icon-button" variant="tertiary" size="small" type="button" :disabled="!canMoveSelectionUp" :aria-label="selectedCount === 1 ? 'Переместить выбранный файл вверх' : 'Переместить выбранные файлы вверх'" @click="moveSelected(-1)"><svg class="icon"><use href="#i-arrow-up" /></svg></DnsIconButton>
-        <DnsIconButton class="icon-button" variant="tertiary" size="small" type="button" :disabled="!canMoveSelectionDown" :aria-label="selectedCount === 1 ? 'Переместить выбранный файл вниз' : 'Переместить выбранные файлы вниз'" @click="moveSelected(1)"><svg class="icon"><use href="#i-arrow-down" /></svg></DnsIconButton>
+        <DnsIconButton class="icon-button" variant="tertiary" size="small" type="button" :disabled="!canMoveSelectionUp" :aria-label="selectedCount === 1 ? 'Переместить выбранный файл вверх' : 'Переместить выбранные файлы вверх'" @click="moveSelected(-1)"><DsIcon name="arrowUp" class="icon" aria-hidden="true" /></DnsIconButton>
+        <DnsIconButton class="icon-button" variant="tertiary" size="small" type="button" :disabled="!canMoveSelectionDown" :aria-label="selectedCount === 1 ? 'Переместить выбранный файл вниз' : 'Переместить выбранные файлы вниз'" @click="moveSelected(1)"><DsIcon name="arrowDown" class="icon" aria-hidden="true" /></DnsIconButton>
       </div>
       <DnsLink class="mobile-selection-bar__delete" tag="a" href="#" variant="danger" @click.prevent.stop="deleteSelected($event)">Удалить выбранные ({{ selectedCount }})</DnsLink>
     </aside>
@@ -1998,47 +2049,61 @@ onBeforeUnmount(() => {
         <header class="mobile-preview-dialog__header">
           <h2 id="mobile-preview-title">Предпросмотр файлов</h2>
           <DnsIconButton class="mobile-preview-dialog__close" variant="tertiary" size="small" type="button" aria-label="Закрыть предпросмотр" @click="closeMobilePreview">
-            <svg class="icon"><use href="#i-close" /></svg>
+            <DsIcon name="close" class="icon" aria-hidden="true" />
           </DnsIconButton>
         </header>
 
         <main class="mobile-preview-dialog__body">
           <DnsSelectInline
             class="mobile-preview-dialog__file-select"
-            :is-open="false"
-            :options="previewFileOptions"
+            :is-open="previewSelectOpen"
+            :options="previewFileSelectOptions"
             position="left"
             size="small"
             aria-label="Файл для предпросмотра"
             @click:input="previewSelectOpen = !previewSelectOpen"
             @close="previewSelectOpen = false"
           >
-            <template #value>{{ currentPreviewFile.name }}</template>
+            <template #value>
+              <span class="mobile-preview-dialog__file-select-value" :title="currentPreviewFile.name">{{ currentPreviewFile.name }}</span>
+            </template>
             <template #default="{ id, title, isSelected }">
-              <DnsRadioOption :is-selected="Boolean(isSelected)" @click="selectPreviewFile(id)">
+              <label v-if="id === PREVIEW_SEARCH_OPTION_ID" class="preview-file-select__search" @click.stop>
+                <span class="visually-hidden">Найти файл в списке</span>
+                <input v-model="previewFileSearch" type="search" placeholder="Найти файл" autocomplete="off" @keydown.stop />
+              </label>
+              <p v-else-if="id === PREVIEW_EMPTY_OPTION_ID" class="preview-file-select__empty">{{ title }}</p>
+              <DnsDefaultOption v-else :is-selected="Boolean(isSelected)" class="preview-file-select__option" @click="selectPreviewFile(id)">
                 {{ title }}
-              </DnsRadioOption>
+              </DnsDefaultOption>
             </template>
           </DnsSelectInline>
 
           <div class="mobile-preview-dialog__file-nav">
-            <span>Файл {{ currentPreviewIndex + 1 }} из {{ uploadedFiles.length }}</span>
+            <span>{{ currentPreviewIndex + 1 }} из {{ uploadedFiles.length }}</span>
             <div aria-label="Переключение файлов">
               <DnsIconButton class="mobile-preview-dialog__icon-button" variant="tertiary" size="small" type="button" :disabled="currentPreviewIndex <= 0" aria-label="Предыдущий файл" @click="navigatePreview(-1)">
-                <svg class="icon"><use href="#i-chevron-left" /></svg>
+                <DsIcon name="chevronLeft" class="icon" aria-hidden="true" />
               </DnsIconButton>
               <DnsIconButton class="mobile-preview-dialog__icon-button" variant="tertiary" size="small" type="button" :disabled="currentPreviewIndex >= uploadedFiles.length - 1" aria-label="Следующий файл" @click="navigatePreview(1)">
-                <svg class="icon"><use href="#i-chevron-right" /></svg>
+                <DsIcon name="chevronRight" class="icon" aria-hidden="true" />
               </DnsIconButton>
             </div>
           </div>
 
-          <div class="mobile-preview-dialog__stage">
+          <div
+            class="mobile-preview-dialog__stage"
+            :class="{ 'mobile-preview-dialog__stage--pannable': currentPreviewIsImage && previewZoom > 1, 'mobile-preview-dialog__stage--panning': previewPointer }"
+            @pointerdown="beginPreviewPan"
+            @pointermove="movePreviewPan"
+            @pointerup="endPreviewPan"
+            @pointercancel="endPreviewPan"
+          >
             <div v-if="currentPreviewIsImage" class="mobile-preview-dialog__image-scroll">
               <img
                 :src="currentPreviewFile.previewUrl"
                 :alt="'Предпросмотр ' + currentPreviewFile.name"
-                :style="{ width: `${previewZoom * 100}%` }"
+                :style="{ transform: `translate(${previewPan.x}px, ${previewPan.y}px) scale(${previewZoom})` }"
                 draggable="false"
               />
             </div>
@@ -2057,7 +2122,7 @@ onBeforeUnmount(() => {
         </main>
 
         <footer class="mobile-preview-dialog__footer">
-          <div class="mobile-preview-dialog__zoom dns-zoom-stepper" aria-label="Масштаб предпросмотра">
+          <div class="mobile-preview-dialog__zoom dns-zoom-stepper" :class="{ 'dns-zoom-stepper--min': !canDecreasePreviewZoom, 'dns-zoom-stepper--max': !canIncreasePreviewZoom }" :data-value="previewZoomStepperValue" aria-label="Масштаб предпросмотра">
             <DnsStepper
               v-model="previewZoomStepperValue"
               class="dns-zoom-stepper__control"
@@ -2066,11 +2131,10 @@ onBeforeUnmount(() => {
               :min="50"
               :max="300"
             />
-            <output class="dns-zoom-stepper__value" aria-live="polite">{{ previewZoomStepperLabel }}</output>
           </div>
 
-          <DnsIconButton class="mobile-preview-dialog__reset" variant="tertiary" size="small" type="button" aria-label="Сбросить масштаб и положение" @click="resetPreviewZoom">
-            <svg class="icon"><use href="#i-rotate-left" /></svg>
+          <DnsIconButton class="mobile-preview-dialog__reset" variant="tertiary" size="small" type="button" aria-label="Вписать в область предпросмотра" @click="resetPreviewZoom">
+            <DsIcon name="fitPreview" class="icon" aria-hidden="true" />
           </DnsIconButton>
 
           <DnsButton
@@ -2078,54 +2142,26 @@ onBeforeUnmount(() => {
             class="mobile-preview-dialog__crop"
             variant="tertiary"
             size="small"
-            type="button"
-            @click="startCropping"
-          >
-            Кадрировать
+          type="button"
+          @click="startCropping"
+        >
+            <template #icon-left><img :src="cropIcon" class="icon" alt="" aria-hidden="true" /></template>
+            Редактировать
           </DnsButton>
 
           <span v-else class="mobile-preview-dialog__page-count">Стр. {{ previewPage }} из {{ currentPreviewPageCount }}</span>
 
           <div v-if="!currentPreviewIsImage" class="mobile-preview-dialog__page-nav" aria-label="Переключение страниц">
             <DnsIconButton class="dns-icon-button" variant="tertiary" size="small" type="button" :disabled="currentPreviewIsImage || previewPage <= 1" aria-label="Предыдущая страница" @click="navigatePage(-1)">
-              <svg class="icon mobile-preview-dialog__chevron-up"><use href="#i-chevron" /></svg>
+              <DsIcon name="chevron" class="icon mobile-preview-dialog__chevron-up" aria-hidden="true" />
             </DnsIconButton>
             <DnsIconButton class="dns-icon-button" variant="tertiary" size="small" type="button" :disabled="currentPreviewIsImage || previewPage >= currentPreviewPageCount" aria-label="Следующая страница" @click="navigatePage(1)">
-              <svg class="icon"><use href="#i-chevron" /></svg>
+              <DsIcon name="chevron" class="icon" aria-hidden="true" />
             </DnsIconButton>
           </div>
         </footer>
       </section>
     </Teleport>
-
-    <DnsBottomSheet
-      v-if="mobilePreviewOpen && previewSelectOpen"
-      class="preview-file-sheet"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Выбор файла для предпросмотра"
-      @close="previewSelectOpen = false"
-    >
-      <div class="preview-file-sheet__content">
-        <label class="preview-file-sheet__search">
-          <span class="visually-hidden">Найти файл в списке</span>
-          <input v-model="previewFileSearch" type="search" placeholder="Найти в списке" autocomplete="off" />
-        </label>
-        <ul class="preview-file-sheet__list">
-          <li v-for="option in filteredPreviewFileOptions" :key="option.id">
-            <button
-              type="button"
-              :class="{ 'preview-file-sheet__option--selected': option.isSelected }"
-              @click="selectPreviewFile(option.id)"
-            >
-              <span>{{ option.title }}</span>
-              <svg v-if="option.isSelected" class="icon" aria-hidden="true"><use href="#i-check" /></svg>
-            </button>
-          </li>
-        </ul>
-        <p v-if="!filteredPreviewFileOptions.length" class="preview-file-sheet__empty">Файлы не найдены</p>
-      </div>
-    </DnsBottomSheet>
 
     <DnsModal
         v-if="cropMode"
@@ -2139,17 +2175,60 @@ onBeforeUnmount(() => {
     >
       <template #header>
         <header class="crop-dialog__header">
-          <h2 id="crop-dialog-title">Кадрирование</h2>
-          <p id="crop-dialog-description" class="visually-hidden">Выберите формат страницы и расположите документ в пределах рамки.</p>
+          <h2 id="crop-dialog-title">Кадрирование изображения</h2>
+          <p id="crop-dialog-description" class="visually-hidden">Выберите формат, измените размер и поворот изображения, затем примените кадрирование.</p>
           <DnsIconButton class="icon-button icon-button--alert-close" variant="tertiary" size="small" type="button" aria-label="Закрыть кадрирование" @click="cancelCropping">
-            <svg class="icon"><use href="#i-close" /></svg>
+            <DsIcon name="close" class="icon" aria-hidden="true" />
           </DnsIconButton>
         </header>
       </template>
 
         <div class="crop-dialog__content">
-          <div class="crop-dialog__meta">
-            <p class="crop-dialog__file-name" :title="currentPreviewFile.name">{{ currentPreviewFile.name }}</p>
+          <div class="crop-dialog__controls">
+            <div class="crop-dialog__control-group">
+              <div class="crop-dialog__control">
+                <span>Размеры:</span>
+                <div class="crop-dialog__zoom dns-zoom-stepper" :class="{ 'dns-zoom-stepper--min': !canDecreaseCropZoom, 'dns-zoom-stepper--max': !canIncreaseCropZoom }" :data-value="cropZoomStepperValue" aria-label="Размер изображения">
+                  <DnsStepper
+                    v-model="cropZoomStepperValue"
+                    class="dns-zoom-stepper__control"
+                    size="small"
+                    color="white"
+                    :min="25"
+                    :max="250"
+                  />
+                </div>
+                <DnsIconButton class="crop-dialog__fit" variant="tertiary" size="small" type="button" aria-label="Вписать изображение" title="Вписать изображение" @click="fillCrop">
+                  <DsIcon name="fitPreview" class="icon" aria-hidden="true" />
+                </DnsIconButton>
+              </div>
+
+              <div class="crop-dialog__control">
+                <span>Поворот:</span>
+                <div class="crop-dialog__rotation-stepper" aria-label="Поворот изображения">
+                  <button type="button" aria-label="Повернуть изображение на 90 градусов влево" @click="rotateCrop(-90)">
+                    <DsIcon name="rotateLeft" class="icon" aria-hidden="true" />
+                  </button>
+                  <label>
+                    <input
+                      v-model="cropRotationInput"
+                      type="number"
+                      min="0"
+                      max="359"
+                      step="1"
+                      inputmode="numeric"
+                      aria-label="Угол поворота в градусах"
+                      @change="setCropRotation(cropRotationInput)"
+                    >
+                    <span aria-hidden="true">°</span>
+                  </label>
+                  <button type="button" aria-label="Повернуть изображение на 90 градусов вправо" @click="rotateCrop(90)">
+                    <DsIcon name="rotateRight" class="icon" aria-hidden="true" />
+                  </button>
+                </div>
+              </div>
+            </div>
+
             <DnsSelectInline
               id="crop-format"
               class="crop-dialog__format"
@@ -2161,7 +2240,7 @@ onBeforeUnmount(() => {
               @click:input="cropFormatSelectOpen = !cropFormatSelectOpen"
               @close="cropFormatSelectOpen = false"
             >
-              <template #label>Формат изображения</template>
+              <template #label>Формат</template>
               <template #value>{{ cropFormatTitle }}</template>
               <template #default="{ id, title, isSelected }">
                 <DnsRadioOption :is-selected="Boolean(isSelected)" @click="selectCropFormat(id)">
@@ -2171,41 +2250,19 @@ onBeforeUnmount(() => {
             </DnsSelectInline>
           </div>
 
-          <div class="crop-dialog__stage">
+          <div class="crop-dialog__stage" @wheel.prevent="zoomCropWithWheel">
             <ReactEasyCrop
               :image="currentPreviewFile.previewUrl"
               v-model:crop="crop"
               v-model:zoom="cropZoom"
               v-model:rotation="cropRotation"
               :aspect="cropAspect"
+              :object-fit="cropObjectFit"
+              :fit-to-crop="cropFitRequest"
               @crop-complete="cropPixels = $event"
             />
           </div>
 
-          <div class="crop-dialog__toolbar">
-            <div class="crop-dialog__zoom dns-zoom-stepper" aria-label="Масштаб кадрирования">
-              <DnsStepper
-                v-model="cropZoomStepperValue"
-                class="dns-zoom-stepper__control"
-                size="small"
-                color="gray"
-                :min="100"
-                :max="300"
-              />
-              <output class="dns-zoom-stepper__value" aria-live="polite">{{ cropZoomStepperLabel }}</output>
-            </div>
-            <DnsIconButton class="icon-button crop-dialog__reset" variant="tertiary" size="small" type="button" aria-label="Сбросить положение и масштаб" @click="changeCropFormat">
-              <svg class="icon"><use href="#i-refresh" /></svg>
-            </DnsIconButton>
-            <div class="crop-dialog__rotate" aria-label="Поворот изображения">
-              <DnsIconButton class="icon-button" variant="tertiary" size="small" type="button" aria-label="Повернуть влево" @click="rotateCrop(-90)">
-                <svg class="icon"><use href="#i-rotate-left" /></svg>
-              </DnsIconButton>
-              <DnsIconButton class="icon-button" variant="tertiary" size="small" type="button" aria-label="Повернуть вправо" @click="rotateCrop(90)">
-                <svg class="icon"><use href="#i-rotate-right" /></svg>
-              </DnsIconButton>
-            </div>
-          </div>
         </div>
 
         <template #footer>
@@ -2292,8 +2349,8 @@ onBeforeUnmount(() => {
     >
       <span class="upload-notification__state" aria-hidden="true">
         <span v-if="uploadingActivityCount" class="upload-activity__spinner upload-notification__spinner" />
-        <svg v-else-if="failedActivityCount" class="icon upload-notification__status upload-notification__status--error"><use href="#i-error-circle" /></svg>
-        <svg v-else class="icon upload-notification__status upload-notification__status--success"><use href="#i-check-circle" /></svg>
+        <DsIcon v-else-if="failedActivityCount" name="errorCircle" class="icon upload-notification__status upload-notification__status--error" aria-hidden="true" />
+        <DsIcon v-else name="checkCircle" class="icon upload-notification__status upload-notification__status--success" aria-hidden="true" />
       </span>
 
       <div class="upload-notification__content">
@@ -2305,7 +2362,7 @@ onBeforeUnmount(() => {
       </div>
 
       <DnsIconButton class="icon-button icon-button--quiet upload-notification__close" variant="tertiary" size="small" type="button" aria-label="Закрыть уведомление о добавлении файлов" @click="closeUploadPanel">
-        <svg class="icon"><use href="#i-close" /></svg>
+        <DsIcon name="close" class="icon" aria-hidden="true" />
       </DnsIconButton>
     </aside>
 
@@ -2335,10 +2392,10 @@ onBeforeUnmount(() => {
             :aria-label="uploadPanelExpanded ? 'Свернуть статус загрузки' : 'Развернуть статус загрузки'"
             @click="uploadPanelExpanded = !uploadPanelExpanded"
           >
-            <svg class="icon upload-status-popover__chevron" :class="{ 'upload-status-popover__chevron--expanded': uploadPanelExpanded }" aria-hidden="true"><use href="#i-chevron" /></svg>
+            <DsIcon name="chevron" class="icon upload-status-popover__chevron" :class="{ 'upload-status-popover__chevron--expanded': uploadPanelExpanded }" aria-hidden="true" />
           </button>
             <button class="upload-status-popover__close" type="button" aria-label="Закрыть статус загрузки" @click="close">
-              <svg class="icon"><use href="#i-close" /></svg>
+              <DsIcon name="close" class="icon" aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -2370,8 +2427,8 @@ onBeforeUnmount(() => {
                   <span>{{ formatSize(activity.size) }} МБ</span>
                   <span v-if="activity.status === 'uploading'" class="upload-activity__percent">{{ activity.progress }}%</span>
                   <span v-if="activity.status === 'uploading'" class="upload-activity__spinner" role="progressbar" :aria-valuenow="activity.progress" aria-valuemin="0" aria-valuemax="100" :aria-label="'Загрузка ' + activity.name" />
-                  <svg v-else-if="activity.status === 'success'" class="icon upload-activity__status upload-activity__status--success" aria-label="Загружен"><use href="#i-check-circle" /></svg>
-                  <svg v-else class="icon upload-activity__status upload-activity__status--error" aria-label="Ошибка"><use href="#i-error-circle" /></svg>
+                  <DsIcon v-else-if="activity.status === 'success'" name="checkCircle" class="icon upload-activity__status upload-activity__status--success" role="img" aria-label="Загружен" />
+                  <DsIcon v-else name="errorCircle" class="icon upload-activity__status upload-activity__status--error" role="img" aria-label="Ошибка" />
                 </div>
               </li>
             </ul>
@@ -2393,7 +2450,7 @@ onBeforeUnmount(() => {
             <h2 id="upload-bottom-sheet-title">{{ uploadPopoverTitle }}</h2>
             <div class="upload-popover__actions">
               <DnsIconButton v-if="!uploadingActivityCount" class="upload-popover__icon-button" variant="tertiary" size="small" type="button" aria-label="Закрыть статус загрузки" @click="close">
-                <svg class="icon"><use href="#i-close" /></svg>
+                <DsIcon name="close" class="icon" aria-hidden="true" />
               </DnsIconButton>
             </div>
           </div>
@@ -2423,8 +2480,8 @@ onBeforeUnmount(() => {
               <span>{{ formatSize(activity.size) }} МБ</span>
               <span v-if="activity.status === 'uploading'" class="upload-activity__percent">{{ activity.progress }}%</span>
               <span v-if="activity.status === 'uploading'" class="upload-activity__spinner" role="progressbar" :aria-valuenow="activity.progress" aria-valuemin="0" aria-valuemax="100" :aria-label="'Загрузка ' + activity.name" />
-              <svg v-else-if="activity.status === 'success'" class="icon upload-activity__status upload-activity__status--success" aria-label="Загружен"><use href="#i-check-circle" /></svg>
-              <svg v-else class="icon upload-activity__status upload-activity__status--error" aria-label="Ошибка"><use href="#i-error-circle" /></svg>
+              <DsIcon v-else-if="activity.status === 'success'" name="checkCircle" class="icon upload-activity__status upload-activity__status--success" role="img" aria-label="Загружен" />
+              <DsIcon v-else name="errorCircle" class="icon upload-activity__status upload-activity__status--error" role="img" aria-label="Ошибка" />
             </div>
           </li>
         </ul>
